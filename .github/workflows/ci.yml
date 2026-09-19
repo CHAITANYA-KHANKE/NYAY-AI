@@ -1,0 +1,60 @@
+# .github/workflows/ci.yml — CI pipeline (brain/12_GITHUB_ACTIONS.md)
+# Gates: zero-warning lint -> strict typecheck -> Vitest suite -> prod build
+# -> verified-secret scan. Secrets live in GitHub Repository Settings only.
+
+name: CI
+
+on:
+  push:
+    branches: [main, develop]
+  pull_request:
+
+jobs:
+  quality:
+    name: Lint, Typecheck & Test
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+      - run: npm ci
+
+      - name: ESLint (zero warnings allowed)
+        run: npm run lint
+
+      - name: TypeScript strict typecheck
+        run: npm run typecheck
+
+      - name: Runtime env gate
+        run: npm run check:env
+
+      - name: Vitest suite + coverage floor (8 suites: API integration, components, anti-hallucination, validators, prompts, rate-limit, secrets, a11y)
+        run: npm run test:coverage
+
+  build:
+    name: Production Build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+      - run: npm ci
+      - name: next build
+        run: npm run build
+
+  secret-scan:
+    name: Secret Scan (verified only)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: TruffleHog
+        uses: trufflesecurity/trufflehog@main
+        with:
+          path: ./
+          extra_args: --only-verified --fail
