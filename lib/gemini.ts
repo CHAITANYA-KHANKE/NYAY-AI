@@ -83,7 +83,7 @@ function getClient(): GoogleGenerativeAI {
   const apiKey = process.env.GEMINI_API_KEY;
   if (!apiKey || apiKey.trim().length === 0) {
     throw new GeminiError(
-      'GEMINI_API_KEY is not configured. Copy .env.local.example to .env.local and add your key.',
+      'GEMINI_API_KEY is not configured. Copy env.template to .env.local and add your key.',
       'AI_NOT_CONFIGURED',
     );
   }

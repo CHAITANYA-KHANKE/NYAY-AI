@@ -43,7 +43,7 @@ git clone <your-repo> && cd nyayai
 npm install
 
 # 2. Configure environment
-cp .env.local.example .env.local
+cp env.template .env.local
 #    → paste your Gemini API key from https://aistudio.google.com/app/apikey
 
 # 3. Run

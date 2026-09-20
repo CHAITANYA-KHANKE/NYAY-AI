@@ -74,8 +74,8 @@ describe('repository secret scan (S1)', () => {
     expect(gitignore).toContain('.env*.local');
   });
 
-  it('ships only placeholder values in .env.local.example', () => {
-    const example = readFileSync(join(ROOT, '.env.local.example'), 'utf8');
+  it('ships only placeholder values in env.template', () => {
+    const example = readFileSync(join(ROOT, 'env.template'), 'utf8');
     expect(example).toContain('your_gemini_api_key_here');
     for (const { regex } of SECRET_PATTERNS) {
       expect(regex.test(example)).toBe(false);

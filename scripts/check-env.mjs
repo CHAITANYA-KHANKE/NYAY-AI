@@ -48,7 +48,7 @@ const apiKey = get('GEMINI_API_KEY');
 if (!apiKey) {
   warn('GEMINI_API_KEY is not set — /api/analyze and /api/chat will return a clear configuration error.');
 } else if (/your_gemini_api_key_here/i.test(apiKey)) {
-  fail('GEMINI_API_KEY still contains the placeholder from .env.local.example — paste a real key.');
+  fail('GEMINI_API_KEY still contains the placeholder from env.template — paste a real key.');
 } else if (apiKey.length < 20) {
   fail(`GEMINI_API_KEY looks too short (${apiKey.length} chars) — check for truncation.`);
 } else {

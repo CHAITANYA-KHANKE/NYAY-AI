@@ -24,6 +24,7 @@ yarn-debug.log*
 yarn-error.log*
 
 # env files — NEVER commit secrets (brain/10 rule S1)
+.env*
 .env
 .env.local
 .env.development.local
