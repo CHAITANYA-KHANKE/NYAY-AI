@@ -6,7 +6,7 @@
  * quote block with clickable citation inside.
  */
 
-import { useState } from 'react';
+import { memo, useState } from 'react';
 import { ChevronDown, Lightbulb, Quote } from 'lucide-react';
 import CitationBadge from '@/components/CitationBadge';
 import RiskBadge from '@/components/RiskBadge';
@@ -24,7 +24,7 @@ const BORDER_BY_RISK: Record<ClauseAnalysis['riskLevel'], string> = {
   LOW: 'border-l-risk-low',
 };
 
-export default function ClauseCard({ clause, defaultOpen = false, onCitationClick }: ClauseCardProps) {
+function ClauseCard({ clause, defaultOpen = false, onCitationClick }: ClauseCardProps) {
   const [open, setOpen] = useState(defaultOpen);
   const panelId = `clause-panel-${clause.clauseTitle.replace(/\W+/g, '-').toLowerCase()}`;
 
@@ -93,3 +93,5 @@ export default function ClauseCard({ clause, defaultOpen = false, onCitationClic
     </article>
   );
 }
+
+export default memo(ClauseCard);

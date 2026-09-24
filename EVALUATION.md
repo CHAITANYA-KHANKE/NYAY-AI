@@ -17,7 +17,7 @@ this repository. Each row lists *how an evaluator can verify it*.
 | Clean layered architecture: `lib/` (pure, unit-tested) → `app/api/` (thin HTTP shells) → `components/` (dumb UI) | see file tree |
 | Single source of truth for limits, labels, disclaimer | `lib/constants.ts` |
 | Typed API envelope (`ApiResponse<T>`, `ApiError`), no ad-hoc JSON shapes | `lib/types.ts` |
-| Documented decisions (7 ADRs) | `brain/17_DECISIONS.md` |
+| Documented decisions (11 ADRs) | `brain/17_DECISIONS.md` |
 | Reproducible build (lockfile committed, pinned Next 14.2) | `package-lock.json` |
 
 ## 2. Security
@@ -27,7 +27,7 @@ this repository. Each row lists *how an evaluator can verify it*.
 | No secrets in repo; env-only key handling; automated **secret-scan test** + TruffleHog CI job | `npm run test`, `SECURITY.md` S1/S8 |
 | Zod validation on all 3 API routes + on AI output | `lib/validators.ts` |
 | File validation: type, size, extension, **magic bytes** | `tests/validators.test.ts` |
-| Rate limiting 10/10/30 per hour per IP | `tests/rate-limit.test.ts` |
+| Rate limiting 10/10/30 per hour per IP (bounded 5,000 buckets) | `tests/rate-limit.test.ts` |
 | 8 security headers incl. CSP + HSTS; `poweredByHeader` off | `next.config.js` |
 | Zero-persistence privacy: in-memory processing, sessionStorage only | `brain/05_DATA_SOURCES.md` |
 | Prompt-injection guard ("data, not commands") | `tests/prompts.test.ts` |
@@ -36,31 +36,36 @@ this repository. Each row lists *how an evaluator can verify it*.
 
 | Evidence | Verify |
 |----------|--------|
-| ~87 kB shared First-Load JS; `lucide-react` icon tree-shaking | `npm run build` output |
-| Cached Gemini client + JSON mode (no re-parse retries on client) | `lib/gemini.ts` |
-| Strict timeouts (60s analyze / 30s chat) with typed 504 mapping | `lib/gemini.ts` |
-| Chat history trimmed to last 10 turns; question/length caps | `lib/validators.ts` |
-| Low temperature (0.2) → grounded, shorter, cheaper completions | `lib/gemini.ts` |
-| Client memoization (`useMemo`/`useCallback`) on hot paths | dashboard, chat, viewer |
-| Page cap (50) + text length caps keep token spend bounded | `lib/validators.ts` |
+| **Enforced First-Load JS Budgets**: Shared $\le$ 88 kB (85.2 kB actual), `/` $\le$ 100 kB (96.1 kB actual, -17.1%), `/dashboard` $\le$ 106 kB (101.3 kB actual) | `npm run check:bundle` |
+| **Dynamic Code-Splitting (`next/dynamic`)**: Heavy client components (`FileUploader`, `UserProfileForm`, `PDFViewer`, `ChatInterface`) loaded on demand | `app/page.tsx`, `app/dashboard/page.tsx` |
+| **Dual FNV-1a Hash In-Memory Caching (`TtlCache`)**: Deduplicates identical document/profile analyses with collision guards | `lib/cache.ts`, `tests/cache.test.ts` |
+| **RAG-Style Token Budgeting & Page Scoring**: BM25-style page ranker filters context to 6,000 token ceiling, retaining Page 1 while dropping irrelevant content | `lib/context.ts`, `tests/context.test.ts` |
+| **Zero-Allocation Token & Word Counter**: Character scanner avoids regex string array allocations | `lib/context.ts` |
+| **Model Fallback Cascade & Timeout Racing**: Time-budgeted `AbortController` (45s analyze / 20s chat) with multi-model fallback chain | `lib/gemini.ts`, `tests/gemini-budget.test.ts` |
+| **Rendering Optimization**: `React.memo` on leaf/card components, rAF-throttled scroll listener, `.cv-auto` content-visibility | `app/globals.css`, components |
+| **Icon Import Optimization**: `optimizePackageImports: ['lucide-react']` eliminates unused icon chunks | `next.config.js` |
 
 ## 4. Testing
 
 | Evidence | Verify |
 |----------|--------|
-| **81 automated tests across 8 suites**, all passing | `npm run test` |
+| **118 automated tests across 12 suites**, all passing | `npm run test` |
 | **API integration tests**: all 3 routes tested with real NextRequest objects; sample PDF parsed end-to-end (200/400/422/500 paths) | `tests/api-routes.test.ts` |
+| **Cache & budgeting tests**: FNV-1a key hashing, TTL eviction, collision protection, and context budgeting | `tests/cache.test.ts`, `tests/context.test.ts` |
+| **Gemini timeout & cascade tests**: Model fallback, retry with jitter, cache hit/miss behavior | `tests/gemini-budget.test.ts` |
 | **Component tests** (React Testing Library + jsdom): risk badges, disclaimer, citations, navbar rendered in a real DOM | `tests/components.test.tsx` |
-| Hallucination-defence suite (the project's #1 risk): fabricated clauses dropped, wrong pages corrected, scores clamped, disclaimer forced | `tests/hallucination.test.ts` |
-| Input-validation suites (file rules, schema edges, caps) | `tests/validators.test.ts` |
-| Prompt-contract tests (grounding rules can't silently regress) | `tests/prompts.test.ts` |
-| Rate-limiter tests with deterministic fake timers | `tests/rate-limit.test.ts` |
-| Repository **secrets scan as a test** (fails CI on leaked keys) | `tests/secrets-scan.test.ts` |
-| Accessibility-regression tests (landmarks, labels, reduced motion) | `tests/a11y-static.test.ts` |
-| **Coverage floor enforced in CI** (lib/: ~80% statements, ~94% functions; thresholds 75/65/90/75) | `npm run test:coverage` |
-| Runtime env verification gate (placeholder/short key detection) | `npm run check:env` |
-| CI runs **lint → typecheck → test → build → secret-scan** on every push/PR | `.github/workflows/ci.yml` |
-| Containerized deployment (multi-stage, non-root) | `Dockerfile` |
+| **Hallucination-defence suite** (the project's #1 risk): fabricated clauses dropped, wrong pages corrected, scores clamped, disclaimer forced | `tests/hallucination.test.ts` |
+| **Input-validation suites** (file rules, schema edges, caps) | `tests/validators.test.ts` |
+| **PDF parser unit tests**: deterministic extraction, error mapping, word counting | `tests/pdf-parser.test.ts` |
+| **Prompt-contract tests** (grounding rules can't silently regress) | `tests/prompts.test.ts` |
+| **Rate-limiter tests** with deterministic fake timers and bounded eviction | `tests/rate-limit.test.ts` |
+| **Repository secrets scan as a test** (fails CI on leaked keys) | `tests/secrets-scan.test.ts` |
+| **Accessibility-regression tests** (landmarks, labels, reduced motion) | `tests/a11y-static.test.ts` |
+| **Coverage floor strictly enforced in CI** (93.5% stmts / 83.0% branch / 98.1% funcs / 93.5% lines; thresholds 88/78/94/88) | `npm run test:coverage` |
+| **Automated bundle budget gate**: Zero-dependency script verifying gzipped First Load JS sizes | `npm run check:bundle` |
+| **Runtime env verification gate** (placeholder/short key detection) | `npm run check:env` |
+| **Unified CI verification pipeline**: `npm run verify` runs all lint, typecheck, coverage, build, env, and bundle checks | `package.json`, `.github/workflows/ci.yml` |
+| **Containerized deployment**: Next.js standalone multi-stage Docker build (`node server.js`) | `Dockerfile` |
 
 ## 5. Accessibility (WCAG 2.1 AA)
 

@@ -1,8 +1,4 @@
-/**
- * components/ui/AuroraBackground.tsx — Premium dark-hero backdrop:
- * drifting aurora blobs, a fading grid texture and floating particles.
- * Purely decorative (aria-hidden), fully CSS-driven.
- */
+import { memo } from 'react';
 
 interface Particle {
   left: string;
@@ -28,7 +24,7 @@ const PARTICLES: Particle[] = [
   { left: '42%', top: '86%', size: 2, duration: 11, delay: 2.8, opacity: 0.28 },
 ];
 
-export default function AuroraBackground() {
+function AuroraBackground() {
   return (
     <div aria-hidden="true" className="pointer-events-none absolute inset-0 overflow-hidden">
       <div className="bg-grid bg-grid-fade absolute inset-0" />
@@ -53,3 +49,5 @@ export default function AuroraBackground() {
     </div>
   );
 }
+
+export default memo(AuroraBackground);

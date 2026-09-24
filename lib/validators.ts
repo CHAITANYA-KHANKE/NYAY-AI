@@ -16,7 +16,16 @@ import {
   MAX_PAGES,
   PDF_MIME_TYPE,
 } from './constants';
+import {
+  getNormalizedPages,
+  normalizeForSearch,
+  parseContextToPages,
+  type NormalizedPage,
+} from './context';
 import type { AnalysisResult, ChatResponse, ParsedPage } from './types';
+
+// Re-export parseContextToPages for backwards compatibility
+export { parseContextToPages } from './context';
 
 /* ------------------------------- Domain enums ---------------------------- */
 
@@ -139,24 +148,27 @@ export function validateFileUpload(input: {
 
 /* ------------------- Hallucination defence (brain/09) -------------------- */
 
-function normalizeForSearch(value: string): string {
-  return value.toLowerCase().replace(/\s+/g, ' ').trim();
-}
-
 /**
  * Try to find the page that actually contains `quote`. Returns the
  * pageNumber on success, or null when the quote cannot be verified —
  * the caller then treats the citation as untrustworthy (rule R1).
+ * Accepts an optional pre-computed array of NormalizedPage objects for efficiency.
  */
-export function locateQuotePage(pages: ParsedPage[], quote: string): number | null {
+export function locateQuotePage(
+  pages: ParsedPage[],
+  quote: string,
+  preNormalized?: NormalizedPage[],
+): number | null {
   const normalizedQuote = normalizeForSearch(quote);
   if (normalizedQuote.length < 8) return null;
 
+  const normalizedPages = preNormalized ?? getNormalizedPages(pages);
   const probes = [normalizedQuote.slice(0, 100), normalizedQuote.slice(0, 60)];
+
   for (const probe of probes) {
     if (probe.length < 8) continue;
-    for (const page of pages) {
-      if (normalizeForSearch(page.text).includes(probe)) {
+    for (const page of normalizedPages) {
+      if (page.normalized.includes(probe)) {
         return page.pageNumber;
       }
     }
@@ -175,18 +187,18 @@ function normalizeClauseNumber(raw: string): string {
 /**
  * Validate + repair the model's analysis:
  *  - clamps the health score into [0, 100]
- *  - re-locates every exact quote inside the real pages and corrects
- *    the citation page when the model got it wrong
+ *  - pre-normalizes page texts once and re-locates every exact quote
  *  - drops clauses whose page citation is outside the document range
  *  - forces the server-side disclaimer verbatim (rule R5)
  */
 export function postProcessAnalysis(result: AnalysisResult, pages: ParsedPage[]): AnalysisResult {
   const totalPages = pages.length;
+  const normalizedPages = getNormalizedPages(pages);
 
   const keyClauses = result.keyClauses
     .map((clause) => {
       const exactQuote = clause.exactQuote.trim();
-      const verifiedPage = locateQuotePage(pages, exactQuote);
+      const verifiedPage = locateQuotePage(pages, exactQuote, normalizedPages);
       return {
         ...clause,
         clauseTitle: clause.clauseTitle.trim() || 'Clause',
@@ -207,31 +219,9 @@ export function postProcessAnalysis(result: AnalysisResult, pages: ParsedPage[])
   };
 }
 
-/** Rebuild ParsedPage[] from the "[PAGE n]\ntext" context the client sends. */
-export function parseContextToPages(documentContext: string): ParsedPage[] {
-  const marker = /\[PAGE\s+(\d+)\s*\]/gi;
-  const matches = [...documentContext.matchAll(marker)];
-  const pages: ParsedPage[] = [];
-
-  matches.forEach((match, index) => {
-    const pageNumber = Number(match[1]);
-    const start = (match.index ?? 0) + match[0].length;
-    const end = index + 1 < matches.length ? matches[index + 1].index ?? documentContext.length : documentContext.length;
-    const text = documentContext.slice(start, end).trim();
-    if (!Number.isInteger(pageNumber) || pageNumber < 1 || text.length === 0) return;
-    pages.push({
-      pageNumber,
-      text,
-      wordCount: text.split(/\s+/).filter(Boolean).length,
-    });
-  });
-
-  return pages;
-}
-
 /**
  * Validate + repair the model's chat answer: citations are verified
- * against the document context exactly like analysis clauses are.
+ * against the memoized normalized document context.
  */
 export function postProcessChatResponse(
   raw: z.infer<typeof chatResponseSchema>,
@@ -239,12 +229,14 @@ export function postProcessChatResponse(
 ): ChatResponse {
   const pages = parseContextToPages(documentContext);
   const totalPages = pages.length;
+  const normalizedPages = getNormalizedPages(pages, documentContext);
 
   const citations = raw.citations
     .map((citation) => ({
       ...citation,
       clauseNumber: normalizeClauseNumber(citation.clauseNumber),
-      pageNumber: locateQuotePage(pages, citation.exactText) ?? Math.round(citation.pageNumber),
+      pageNumber:
+        locateQuotePage(pages, citation.exactText, normalizedPages) ?? Math.round(citation.pageNumber),
     }))
     .filter(
       (citation) =>

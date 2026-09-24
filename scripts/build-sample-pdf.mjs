@@ -116,13 +116,12 @@ function pageContentStream(lines) {
   const wrapped = lines.flatMap((line) => (line === null ? [''] : wrap(line)));
   const body = wrapped
     .map((line, index) => `${index === 0 ? '' : 'T* '}(${escapePdfText(line)}) Tj`)
-    .join('\n');
-  return `BT\n/F1 11 Tf\n50 742 Td\n15 TL\n${body}\nET`;
+    .join('\r\n');
+  return `BT\r\n/F1 11 Tf\r\n50 742 Td\r\n15 TL\r\n${body}\r\nET`;
 }
 
 function buildPdf(pages) {
   const objects = [];
-  // 1 Catalog, 2 Pages, 3.. pages, then contents, then font
   const pageObjNums = pages.map((_, i) => 3 + i);
   const contentObjNums = pages.map((_, i) => 3 + pages.length + i);
   const fontObjNum = 3 + pages.length * 2;
@@ -136,24 +135,24 @@ function buildPdf(pages) {
   });
   pages.forEach((lines, i) => {
     const stream = pageContentStream(lines);
-    objects[2 + pages.length + i] = `<< /Length ${Buffer.byteLength(stream, 'latin1')} >>\nstream\n${stream}\nendstream`;
+    objects[2 + pages.length + i] = `<< /Length ${Buffer.byteLength(stream, 'latin1')} >>\r\nstream\r\n${stream}\r\nendstream`;
   });
   objects[2 + pages.length * 2] = `<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica /Encoding /WinAnsiEncoding >>`;
 
-  let pdf = '%PDF-1.4\n';
+  let pdf = '%PDF-1.4\r\n';
   const offsets = [];
   objects.forEach((body, i) => {
     offsets.push(Buffer.byteLength(pdf, 'latin1'));
-    pdf += `${i + 1} 0 obj\n${body}\nendobj\n`;
+    pdf += `${i + 1} 0 obj\r\n${body}\r\nendobj\r\n`;
   });
 
   const xrefStart = Buffer.byteLength(pdf, 'latin1');
   const count = objects.length + 1;
-  pdf += `xref\n0 ${count}\n0000000000 65535 f \n`;
+  pdf += `xref\r\n0 ${count}\r\n0000000000 65535 f \r\n`;
   offsets.forEach((offset) => {
-    pdf += `${String(offset).padStart(10, '0')} 00000 n \n`;
+    pdf += `${String(offset).padStart(10, '0')} 00000 n \r\n`;
   });
-  pdf += `trailer\n<< /Size ${count} /Root 1 0 R >>\nstartxref\n${xrefStart}\n%%EOF\n`;
+  pdf += `trailer\r\n<< /Size ${count} /Root 1 0 R >>\r\nstartxref\r\n${xrefStart}\r\n%%EOF\r\n`;
 
   return Buffer.from(pdf, 'latin1');
 }

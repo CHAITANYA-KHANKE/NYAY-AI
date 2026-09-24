@@ -7,7 +7,7 @@
  * extract is exactly what the AI read, so verification is faithful.
  */
 
-import { useEffect, useMemo, useRef } from 'react';
+import { memo, useEffect, useMemo, useRef } from 'react';
 import { ChevronLeft, ChevronRight, FileSearch } from 'lucide-react';
 import type { ReactNode } from 'react';
 import type { ParsedPage } from '@/lib/types';
@@ -23,23 +23,26 @@ function escapeRegExp(value: string): string {
   return value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 }
 
-/** Build up to two highlight ranges: the first and last words of the quote. */
-function quoteRanges(text: string, quote: string): Array<[number, number]> {
+/** Pre-compile regexes for a quote so we don't compile RegExp inside tight loops. */
+function buildQuoteRegexes(quote: string): RegExp[] {
   const words = quote.trim().split(/\s+/).filter(Boolean);
   if (words.length === 0) return [];
   const snippets: string[][] = [words.slice(0, 6)];
   if (words.length > 9) snippets.push(words.slice(-6));
+  return snippets.map((snippet) => new RegExp(snippet.map(escapeRegExp).join('\\s+'), 'i'));
+}
 
+function findRangesWithRegexes(text: string, regexes: RegExp[]): Array<[number, number]> {
+  if (regexes.length === 0) return [];
   const ranges: Array<[number, number]> = [];
-  for (const snippet of snippets) {
-    const regex = new RegExp(snippet.map(escapeRegExp).join('\\s+'), 'i');
+  for (const regex of regexes) {
     const match = regex.exec(text);
     if (match) ranges.push([match.index, match.index + match[0].length]);
   }
   return ranges;
 }
 
-export default function PDFViewer({ pages, activePage, highlightText, onPageChange }: PDFViewerProps) {
+function PDFViewer({ pages, activePage, highlightText, onPageChange }: PDFViewerProps) {
   const totalPages = pages.length;
   const firstMarkRef = useRef<HTMLElement | null>(null);
 
@@ -48,13 +51,17 @@ export default function PDFViewer({ pages, activePage, highlightText, onPageChan
     return pages[clamped - 1];
   }, [pages, activePage, totalPages]);
 
+  const quoteRegexes = useMemo(() => {
+    return highlightText && highlightText.trim().length > 0 ? buildQuoteRegexes(highlightText) : [];
+  }, [highlightText]);
+
   // If the cited quote lives on a different page than requested, follow it.
   useEffect(() => {
-    if (!highlightText || !page || totalPages === 0) return;
-    if (quoteRanges(page.text, highlightText).length > 0) return;
-    const found = pages.find((candidate) => quoteRanges(candidate.text, highlightText).length > 0);
+    if (!highlightText || !page || totalPages === 0 || quoteRegexes.length === 0) return;
+    if (findRangesWithRegexes(page.text, quoteRegexes).length > 0) return;
+    const found = pages.find((candidate) => findRangesWithRegexes(candidate.text, quoteRegexes).length > 0);
     if (found && found.pageNumber !== activePage) onPageChange(found.pageNumber);
-  }, [highlightText, page, pages, activePage, totalPages, onPageChange]);
+  }, [highlightText, page, pages, activePage, totalPages, onPageChange, quoteRegexes]);
 
   // Scroll the first highlight into view whenever it changes.
   useEffect(() => {
@@ -63,9 +70,9 @@ export default function PDFViewer({ pages, activePage, highlightText, onPageChan
 
   const content = useMemo<ReactNode[]>(() => {
     if (!page) return [];
-    if (!highlightText || highlightText.trim().length === 0) return [page.text];
+    if (!highlightText || highlightText.trim().length === 0 || quoteRegexes.length === 0) return [page.text];
 
-    const ranges = quoteRanges(page.text, highlightText).sort((a, b) => a[0] - b[0]);
+    const ranges = findRangesWithRegexes(page.text, quoteRegexes).sort((a, b) => a[0] - b[0]);
     if (ranges.length === 0) return [page.text];
 
     const nodes: ReactNode[] = [];
@@ -84,7 +91,7 @@ export default function PDFViewer({ pages, activePage, highlightText, onPageChan
     });
     nodes.push(page.text.slice(cursor));
     return nodes;
-  }, [page, highlightText]);
+  }, [page, highlightText, quoteRegexes]);
 
   if (!page) {
     return (
@@ -141,3 +148,5 @@ export default function PDFViewer({ pages, activePage, highlightText, onPageChan
     </section>
   );
 }
+
+export default memo(PDFViewer);

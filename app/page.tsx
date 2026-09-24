@@ -9,6 +9,7 @@
  */
 
 import { useCallback, useEffect, useRef, useState } from 'react';
+import dynamic from 'next/dynamic';
 import { useRouter } from 'next/navigation';
 import {
   AlertCircle,
@@ -26,8 +27,6 @@ import {
   Wand2,
 } from 'lucide-react';
 import Disclaimer from '@/components/Disclaimer';
-import FileUploader from '@/components/FileUploader';
-import UserProfileForm from '@/components/UserProfileForm';
 import AuroraBackground from '@/components/ui/AuroraBackground';
 import GradientText from '@/components/ui/GradientText';
 import Magnetic from '@/components/ui/Magnetic';
@@ -35,6 +34,20 @@ import Reveal from '@/components/ui/Reveal';
 import SpotlightCard from '@/components/ui/SpotlightCard';
 import { APP_NAME_HINDI, APP_TAGLINE, SESSION_STORAGE_KEYS } from '@/lib/constants';
 import type { AnalysisResult, ApiResponse, ParseResponse, UserProfile } from '@/lib/types';
+
+const FileUploader = dynamic(() => import('@/components/FileUploader'), {
+  ssr: false,
+  loading: () => (
+    <div className="h-44 w-full animate-pulse rounded-2xl bg-slate-100" aria-hidden="true" />
+  ),
+});
+
+const UserProfileForm = dynamic(() => import('@/components/UserProfileForm'), {
+  ssr: false,
+  loading: () => (
+    <div className="h-64 w-full animate-pulse rounded-2xl bg-slate-100" aria-hidden="true" />
+  ),
+});
 
 type Step = 'upload' | 'profile' | 'processing';
 
@@ -98,21 +111,29 @@ export default function HomePage() {
     };
   }, [step]);
 
-  // Scroll-up reveal for the crystallized AI bar (hysteresis avoids flicker).
+  // Scroll-up reveal for the crystallized AI bar (requestAnimationFrame throttles to 1 update/frame).
   useEffect(() => {
+    let rafId: number | null = null;
     const onScroll = () => {
-      const y = window.scrollY;
-      if (y < 80) {
-        setShowTopBar(true);
-      } else if (y < lastScrollY.current - 6) {
-        setShowTopBar(true);
-      } else if (y > lastScrollY.current + 6) {
-        setShowTopBar(false);
-      }
-      lastScrollY.current = y;
+      if (rafId !== null) return;
+      rafId = window.requestAnimationFrame(() => {
+        const y = window.scrollY;
+        if (y < 80) {
+          setShowTopBar(true);
+        } else if (y < lastScrollY.current - 6) {
+          setShowTopBar(true);
+        } else if (y > lastScrollY.current + 6) {
+          setShowTopBar(false);
+        }
+        lastScrollY.current = y;
+        rafId = null;
+      });
     };
     window.addEventListener('scroll', onScroll, { passive: true });
-    return () => window.removeEventListener('scroll', onScroll);
+    return () => {
+      window.removeEventListener('scroll', onScroll);
+      if (rafId !== null) window.cancelAnimationFrame(rafId);
+    };
   }, []);
 
   // Cursor spotlight over the hero (CSS vars only — no re-render).
@@ -422,7 +443,7 @@ export default function HomePage() {
         </section>
 
         {/* --------------------------- TRUST CARDS --------------------------- */}
-        <section className="px-4 pt-16 sm:px-6" aria-label="Why trust NyayAI">
+        <section className="cv-auto px-4 pt-16 sm:px-6" aria-label="Why trust NyayAI">
           <div className="mx-auto w-full max-w-6xl">
             {step === 'upload' && (
               <>

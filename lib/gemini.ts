@@ -1,19 +1,31 @@
 /**
- * lib/gemini.ts — Google Gemini integration (brain/02 TRD, brain/17 ADR-002/004).
+ * lib/gemini.ts — Google Gemini integration (brain/02 TRD, brain/17 ADR-002/004/008).
  *
  * Guarantees enforced here:
- *  - JSON mode (`responseMimeType: application/json`) so output parses
+ *  - JSON mode (`responseMimeType: application/json`) so output parses cleanly
  *  - Zod validation of every model response before it reaches a client
- *  - one automatic retry on malformed JSON (brain/09)
- *  - **model fallback chain**: on 503/high-demand or retired-model errors
- *    the next verified model is tried transparently (models get
- *    deprecated/overloaded in production — the demo must never die)
- *  - timeouts mapped to clean, typed errors (503/504/429/502 semantics)
- *  - hallucination post-processing via lib/validators.ts (rule R1/R2)
+ *  - Token-budgeted prompts and output token bounds per task type
+ *  - In-memory TTL cache for document analysis (0-cost repeated runs)
+ *  - **Time-bounded fallback chain**: on 503/high-demand or retired-model errors
+ *    the next verified model is tried within the global deadline budget
+ *  - Strict AbortController timeouts mapped to typed errors (503/504/429/502)
+ *  - Hallucination post-processing via lib/validators.ts (rule R1/R2)
  */
 
 import { GoogleGenerativeAI, type GenerativeModel } from '@google/generative-ai';
-import { LEGAL_DISCLAIMER } from './constants';
+import { hashKey, TtlCache, type CacheStats } from './cache';
+import {
+  AI_BUDGETS,
+  ANALYSIS_CACHE,
+  LEGAL_DISCLAIMER,
+  MAX_ANALYSIS_OUTPUT_TOKENS,
+  MAX_CHAT_CONTEXT_TOKENS,
+  MAX_CHAT_OUTPUT_TOKENS,
+  PROMPT_VERSION,
+  RETRY_BASE_DELAY_MS,
+  RETRY_MAX_DELAY_MS,
+} from './constants';
+import { fitContextToBudget } from './context';
 import { buildAnalysisPrompt, buildChatPrompt } from './prompts';
 import type { AnalysisResult, ChatMessage, ChatResponse, ParsedPage, UserProfile } from './types';
 import {
@@ -33,8 +45,6 @@ const MODEL_CANDIDATES: string[] = Array.from(
   new Set([PRIMARY_MODEL, 'gemini-3.7-flash', 'gemini-3.8-flash', 'gemini-3-flash-preview']),
 );
 
-const ANALYSIS_TIMEOUT_MS = 60_000;
-const CHAT_TIMEOUT_MS = 30_000;
 const MAX_ATTEMPTS_PER_MODEL = 2;
 
 export type GeminiErrorCode =
@@ -93,8 +103,9 @@ function getClient(): GoogleGenerativeAI {
   return cachedClient;
 }
 
-function getJsonModel(modelName: string): GenerativeModel {
-  const cached = modelCache.get(modelName);
+function getJsonModel(modelName: string, maxOutputTokens: number): GenerativeModel {
+  const cacheKey = `${modelName}:${maxOutputTokens}`;
+  const cached = modelCache.get(cacheKey);
   if (cached) return cached;
   const model = getClient().getGenerativeModel({
     model: modelName,
@@ -102,41 +113,23 @@ function getJsonModel(modelName: string): GenerativeModel {
       responseMimeType: 'application/json', // ADR-004 — guarantees JSON-shaped output
       temperature: 0.2, // low temperature = less creativity, more grounding
       topP: 0.8,
-      maxOutputTokens: 8192,
+      maxOutputTokens,
     },
   });
-  modelCache.set(modelName, model);
+  modelCache.set(cacheKey, model);
   return model;
 }
 
 /* -------------------------------- Helpers -------------------------------- */
 
-function withTimeout<T>(promise: Promise<T>, ms: number, label: string): Promise<T> {
-  return new Promise<T>((resolve, reject) => {
-    const timer = setTimeout(() => {
-      reject(new GeminiError(`${label} is taking too long. Please retry.`, 'AI_TIMEOUT'));
-    }, ms);
-    promise.then(
-      (value) => {
-        clearTimeout(timer);
-        resolve(value);
-      },
-      (error: unknown) => {
-        clearTimeout(timer);
-        reject(mapGeminiError(error));
-      },
-    );
-  });
-}
-
 /** True when trying the next model in the chain is worthwhile. */
-function isModelFallbackError(message: string): boolean {
+export function isModelFallbackError(message: string): boolean {
   return /503|unavailable|high demand|overloaded|no longer available|not found|NOT_FOUND|deadline/i.test(
     message,
   );
 }
 
-function mapGeminiError(error: unknown): GeminiError {
+export function mapGeminiError(error: unknown): GeminiError {
   if (error instanceof GeminiError) return error;
   const message = error instanceof Error ? error.message : String(error);
 
@@ -147,7 +140,7 @@ function mapGeminiError(error: unknown): GeminiError {
       30,
     );
   }
-  if (/timeout|ETIMEDOUT|ECONNRESET/i.test(message)) {
+  if (/abort|timeout|ETIMEDOUT|ECONNRESET/i.test(message)) {
     return new GeminiError('The AI service timed out. Please retry.', 'AI_TIMEOUT');
   }
   if (/API key not valid|API_KEY_INVALID|permission|unregistered/i.test(message)) {
@@ -173,7 +166,7 @@ function mapGeminiError(error: unknown): GeminiError {
 }
 
 /** Defensive cleanup in case the model wraps JSON in markdown fences. */
-function extractJsonText(raw: string): string {
+export function extractJsonText(raw: string): string {
   let cleaned = raw.trim();
   if (cleaned.startsWith('```')) {
     cleaned = cleaned.replace(/^```(?:json)?\s*/i, '').replace(/```\s*$/, '').trim();
@@ -186,51 +179,112 @@ async function generateJson(
   timeoutMs: number,
   label: string,
   modelName: string,
+  maxOutputTokens: number,
 ): Promise<unknown> {
-  const result = await withTimeout(getJsonModel(modelName).generateContent(prompt), timeoutMs, label);
-  const text = result.response.text();
-  return JSON.parse(extractJsonText(text));
+  const controller = new AbortController();
+  let timer: ReturnType<typeof setTimeout> | undefined;
+
+  try {
+    const model = getJsonModel(modelName, maxOutputTokens);
+    const result = await Promise.race([
+      model.generateContent(
+        { contents: [{ role: 'user', parts: [{ text: prompt }] }] },
+        { signal: controller.signal, timeout: timeoutMs },
+      ),
+      new Promise<never>((_, reject) => {
+        timer = setTimeout(() => {
+          controller.abort();
+          reject(new GeminiError(`${label} is taking too long. Please retry.`, 'AI_TIMEOUT'));
+        }, timeoutMs);
+      }),
+    ]);
+    const text = result.response.text();
+    return JSON.parse(extractJsonText(text));
+  } catch (error) {
+    if (error instanceof GeminiError) throw error;
+    throw mapGeminiError(error);
+  } finally {
+    if (timer) clearTimeout(timer);
+  }
+}
+
+async function backoff(attempt: number, deadline: number): Promise<void> {
+  const base = Math.min(RETRY_MAX_DELAY_MS, RETRY_BASE_DELAY_MS * Math.pow(2, attempt - 1));
+  const jitter = Math.random() * (0.25 * base);
+  const delay = Math.round(base + jitter);
+  if (Date.now() + delay >= deadline) {
+    return;
+  }
+  await new Promise((resolve) => setTimeout(resolve, delay));
 }
 
 /**
- * Shared driver: tries each candidate model; per model, retries once on
- * malformed JSON (brain/09); cascades to the next model on 503/high
- * demand/retired-model errors. Throws only when configuration, rate
- * limits or timeouts make further attempts pointless.
+ * Shared driver: tries candidate models within the total deadline budget;
+ * per model, retries once on malformed JSON or recoverable timeouts;
+ * cascades to the next model on 503/high demand/retired-model errors.
  */
 async function runWithModelFallback<T>(
   label: string,
-  timeoutMs: number,
+  budget: { perAttemptMs: number; totalMs: number },
   prompt: string,
   process: (raw: unknown) => T | null,
+  maxOutputTokens: number,
 ): Promise<T> {
+  const deadline = Date.now() + budget.totalMs;
   let lastError: GeminiError | null = null;
 
   for (const modelName of MODEL_CANDIDATES) {
     for (let attempt = 1; attempt <= MAX_ATTEMPTS_PER_MODEL; attempt += 1) {
+      const remainingTotal = deadline - Date.now();
+      if (remainingTotal <= 1_500) {
+        throw new GeminiError(`${label} is taking too long.`, 'AI_TIMEOUT');
+      }
+
+      const attemptTimeout = Math.max(1_000, Math.min(budget.perAttemptMs, remainingTotal));
+
       try {
-        const raw = await generateJson(prompt, timeoutMs, label, modelName);
+        const raw = await generateJson(prompt, attemptTimeout, label, modelName, maxOutputTokens);
         const processed = process(raw);
         if (processed === null) {
           lastError = new GeminiError(
             'The AI returned an unexpected response format. Please retry.',
             'AI_BAD_RESPONSE',
           );
-          continue; // brain/09 — retry once on malformed JSON
+          if (attempt < MAX_ATTEMPTS_PER_MODEL) {
+            await backoff(attempt, deadline);
+            continue; // retry once with exponential backoff + jitter
+          }
+          break;
         }
         return processed;
       } catch (error) {
         const message = error instanceof Error ? error.message : String(error);
-        const mapped = mapGeminiError(error);
+        const mapped = error instanceof GeminiError ? error : mapGeminiError(error);
+
         if (isModelFallbackError(message) || mapped.code === 'AI_UNAVAILABLE') {
           lastError = mapped.code === 'AI_UNAVAILABLE' ? mapped : mapGeminiError(error);
-          break; // try the next model in the chain
+          break; // cascade to next model
         }
+
         if (mapped.code === 'AI_BAD_RESPONSE') {
           lastError = mapped;
-          continue;
+          if (attempt < MAX_ATTEMPTS_PER_MODEL) {
+            await backoff(attempt, deadline);
+            continue;
+          }
+          break;
         }
-        throw mapped; // config / rate-limit / timeout — other models won't help
+
+        if (mapped.code === 'AI_TIMEOUT') {
+          lastError = mapped;
+          if (attempt < MAX_ATTEMPTS_PER_MODEL && deadline - Date.now() > 1_500) {
+            await backoff(attempt, deadline);
+            continue;
+          }
+          break;
+        }
+
+        throw mapped; // config / rate-limit — other models won't help
       }
     }
   }
@@ -241,39 +295,84 @@ async function runWithModelFallback<T>(
   );
 }
 
+/* ------------------------------ Caching ---------------------------------- */
+
+const analysisCache = new TtlCache<AnalysisResult>(
+  ANALYSIS_CACHE.maxEntries,
+  ANALYSIS_CACHE.ttlMs,
+);
+
+export function buildAnalysisCacheKey(pages: ParsedPage[], profile: UserProfile): string {
+  return `analyze:${hashKey(
+    JSON.stringify({
+      v: PROMPT_VERSION,
+      pages: pages.map((p) => [p.pageNumber, p.text]),
+      profile,
+    }),
+  )}`;
+}
+
+export function getAiCacheStats(): CacheStats {
+  return analysisCache.stats();
+}
+
+export function clearAiCache(): void {
+  analysisCache.clear();
+}
+
 /* ------------------------------ Public API ------------------------------- */
 
 /**
- * Full personalized document analysis. Cascades through the model chain
- * on transient failures, then post-processes to verify every citation
- * against the real extracted pages.
+ * Full personalized document analysis.
+ * Checks bounded in-memory cache first (0 network tokens on repeat);
+ * otherwise cascades through the model chain within the total time budget.
  */
 export async function analyzeDocument(
   pages: ParsedPage[],
   userProfile: UserProfile,
 ): Promise<AnalysisResult> {
+  const key = buildAnalysisCacheKey(pages, userProfile);
+  const cached = analysisCache.get(key);
+  if (cached) return cached;
+
   const prompt = buildAnalysisPrompt(pages, userProfile);
-  return runWithModelFallback('Document analysis', ANALYSIS_TIMEOUT_MS, prompt, (raw) => {
-    const parsed = analysisResultSchema.safeParse(raw);
-    if (!parsed.success) return null;
-    return postProcessAnalysis(parsed.data as AnalysisResult, pages);
-  });
+  const result = await runWithModelFallback(
+    'Document analysis',
+    AI_BUDGETS.analyze,
+    prompt,
+    (raw) => {
+      const parsed = analysisResultSchema.safeParse(raw);
+      if (!parsed.success) return null;
+      return postProcessAnalysis(parsed.data as AnalysisResult, pages);
+    },
+    MAX_ANALYSIS_OUTPUT_TOKENS,
+  );
+
+  analysisCache.set(key, result);
+  return result;
 }
 
 /**
- * Grounded Q&A over the document context. Same fallback + verification
- * policy as analysis; the disclaimer is always server-appended.
+ * Grounded Q&A over the document context.
+ * Fits context to budget while verifying citations against the full document.
  */
 export async function chatWithDocument(
   question: string,
   documentContext: string,
   history: ChatMessage[],
 ): Promise<ChatResponse> {
-  const prompt = buildChatPrompt(question, documentContext, history);
-  const response = await runWithModelFallback('Answer generation', CHAT_TIMEOUT_MS, prompt, (raw) => {
-    const parsed = chatResponseSchema.safeParse(raw);
-    if (!parsed.success) return null;
-    return postProcessChatResponse(parsed.data, documentContext);
-  });
+  const budgeted = fitContextToBudget(question, documentContext, MAX_CHAT_CONTEXT_TOKENS);
+  const prompt = buildChatPrompt(question, budgeted.context, history);
+  const response = await runWithModelFallback(
+    'Answer generation',
+    AI_BUDGETS.chat,
+    prompt,
+    (raw) => {
+      const parsed = chatResponseSchema.safeParse(raw);
+      if (!parsed.success) return null;
+      return postProcessChatResponse(parsed.data, documentContext); // Always verify against the FULL document
+    },
+    MAX_CHAT_OUTPUT_TOKENS,
+  );
   return { ...response, disclaimer: LEGAL_DISCLAIMER };
 }

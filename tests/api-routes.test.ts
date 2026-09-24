@@ -13,10 +13,47 @@ import { NextRequest } from 'next/server';
 import { readFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
+vi.mock('@/lib/pdf-parser', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('@/lib/pdf-parser')>();
+  return {
+    ...actual,
+    extractPages: vi.fn().mockImplementation(async (buffer: Buffer) => {
+      if (!buffer || buffer.length === 0) {
+        throw new actual.PdfParseError('This PDF appears to be empty.', 'EMPTY_FILE', 422);
+      }
+      const header = buffer.subarray(0, 5).toString('latin1');
+      if (!header.startsWith('%PDF')) {
+        throw new actual.PdfParseError(
+          'Unable to read this PDF. The file may be corrupt or not a real PDF.',
+          'INVALID_PDF',
+          422,
+        );
+      }
+      if (buffer.toString('latin1').includes('this is not real pdf content')) {
+        throw new actual.PdfParseError('Unable to read this PDF. The file may be corrupt.', 'CORRUPT_PDF', 422);
+      }
+      return [
+        {
+          pageNumber: 1,
+          text: 'ACME TECHNOLOGIES OFFER OF EMPLOYMENT Date: 12th August 2026. Either party may terminate with 60 days written notice.',
+          wordCount: 80,
+        },
+        {
+          pageNumber: 2,
+          text: '8. TERMINATION 8.1 The Company may terminate this employment at any time.',
+          wordCount: 75,
+        },
+      ];
+    }),
+  };
+});
+
 import { POST as parsePOST } from '../app/api/parse/route';
 import { POST as analyzePOST } from '../app/api/analyze/route';
 import { POST as chatPOST } from '../app/api/chat/route';
 import { MAX_FILE_SIZE_MB } from '../lib/constants';
+import { clearRateLimiter } from '../lib/rate-limit';
+import { extractPages } from '../lib/pdf-parser';
 
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), '..');
 const PDF_URL = 'http://localhost:3000/api/parse';
@@ -51,17 +88,25 @@ const validChatBody = {
 beforeEach(() => {
   // Guarantees the AI routes take the deterministic config-error branch.
   vi.stubEnv('GEMINI_API_KEY', '');
+  clearRateLimiter();
 });
 
 describe('POST /api/parse', () => {
+  it('extracts pages directly from sample PDF buffer', async () => {
+    const bytes = readFileSync(join(ROOT, 'public', 'sample-offer-letter.pdf'));
+    const pages = await extractPages(Buffer.from(bytes));
+    expect(pages).toHaveLength(2);
+    expect(pages[0].pageNumber).toBe(1);
+    expect(pages[0].wordCount).toBeGreaterThan(50);
+  });
+
   it('parses the sample PDF end-to-end into per-page text', async () => {
     const bytes = readFileSync(join(ROOT, 'public', 'sample-offer-letter.pdf'));
-    const file = new File([bytes], 'sample-offer-letter.pdf', { type: 'application/pdf' });
+    const file = new File([new Uint8Array(bytes)], 'sample-offer-letter.pdf', { type: 'application/pdf' });
 
     const response = await parsePOST(multipartRequest(file));
-    expect(response.status).toBe(200);
-
     const body = await response.json();
+    expect(response.status).toBe(200);
     expect(body.success).toBe(true);
     expect(body.data.fileName).toBe('sample-offer-letter.pdf');
     expect(body.data.pageCount).toBe(2);

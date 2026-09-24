@@ -2,11 +2,21 @@
 const nextConfig = {
   reactStrictMode: true,
   poweredByHeader: false,
+  compress: true,
+  swcMinify: true,
+  output: 'standalone',
+  compiler: {
+    removeConsole:
+      process.env.NODE_ENV === 'production'
+        ? { exclude: ['error', 'warn'] }
+        : false,
+  },
   experimental: {
     // Server Actions are enabled by default in Next.js 14.
     // pdf-parse must be required from node_modules at runtime (not
     // webpack-bundled) so its bundled pdf.js build loads correctly.
     serverComponentsExternalPackages: ['pdf-parse'],
+    optimizePackageImports: ['lucide-react'],
   },
   headers: async () => [
     {

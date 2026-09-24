@@ -37,3 +37,7 @@ jobs:
 
       - name: Production build verification
         run: npm run build
+
+      - name: Bundle budget verification (gzip First Load JS)
+        run: npm run check:bundle
+

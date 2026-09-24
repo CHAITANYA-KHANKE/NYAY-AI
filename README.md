@@ -67,43 +67,60 @@ whole demo — well under 40 clicks. No PDF handy? Use the built-in
 nyayai/
 ├── brain/                  # 18-file product+tech brain (00_MASTER_RULES … 17_DECISIONS)
 ├── app/
-│   ├── page.tsx            # Landing: hero → upload → profile → processing
-│   ├── dashboard/page.tsx  # Health score, clauses, missing concerns, chat, viewer
+│   ├── page.tsx            # Landing: hero → upload → profile → processing (code-split)
+│   ├── dashboard/page.tsx  # Health score, clauses, missing concerns, chat, viewer (code-split)
 │   └── api/
 │       ├── parse/route.ts    # POST multipart PDF → per-page text
-│       ├── analyze/route.ts  # POST pages+profile → AnalysisResult (grounded)
-│       └── chat/route.ts     # POST question → cited answer / "not available"
-├── components/             # 10 UI components (all aria-labelled, WCAG 2.1 AA)
+│       ├── analyze/route.ts  # POST pages+profile → AnalysisResult (cached & grounded)
+│       └── chat/route.ts     # POST question → cited answer / "not available" (budgeted)
+├── components/             # 10 UI components (React.memo, aria-labelled, WCAG 2.1 AA)
 ├── lib/
 │   ├── types.ts            # Domain model (brain/04)
-│   ├── constants.ts        # Limits, labels, server-enforced disclaimer
+│   ├── constants.ts        # Limits, labels, server-enforced disclaimer, budgets
+│   ├── cache.ts            # High-perf TTL in-memory LRU cache + FNV-1a hashing
+│   ├── context.ts          # Zero-allocation token estimation & BM25 page budgeting
 │   ├── pdf-parser.ts       # Deterministic per-page extraction
 │   ├── prompts.ts          # Zero-hallucination prompt builders
-│   ├── gemini.ts           # Gemini client: JSON mode, retry, timeouts
+│   ├── gemini.ts           # Gemini client: JSON mode, timeout race, multi-model cascade
 │   ├── validators.ts       # Zod schemas + citation verification / repair
-│   └── rate-limit.ts       # In-memory sliding-window limiter (10/ip/hr)
-├── scripts/build-sample-pdf.mjs  # Regenerates public/sample-offer-letter.pdf
+│   └── rate-limit.ts       # Bounded sliding-window limiter (10/ip/hr, 5k max entries)
+├── scripts/
+│   ├── bundle-budget.mjs   # Automated First Load JS budget enforcement
+│   ├── build-sample-pdf.mjs# Regenerates public/sample-offer-letter.pdf
+│   └── check-env.mjs       # Validates runtime environment configuration
+├── PERFORMANCE.md          # Comprehensive performance & efficiency benchmarks
 └── public/sample-offer-letter.pdf
 ```
+
+## ⚡ Efficiency & Performance
+
+- 📦 **Enforced First Load JS Budgets**: Shared $\le$ 88 kB (85.2 kB actual), `/` $\le$ 100 kB (96.1 kB actual, -17.1%), `/dashboard` $\le$ 106 kB (101.3 kB actual).
+- 🔀 **Dynamic Code-Splitting**: Non-critical client trees (`FileUploader`, `UserProfileForm`, `PDFViewer`, `ChatInterface`) loaded via `next/dynamic`.
+- 🧠 **Dual FNV-1a LRU Caching**: In-memory `TtlCache` deduplicates document analysis with zero external infrastructure overhead.
+- 🎯 **RAG-Style Token Budgeting**: BM25 page ranking bounds context to 6,000 tokens while keeping Page 1 anchored and quotes 100% verified.
+- ⏱️ **Model Resilience Cascade**: Strict `AbortController` racing with automatic fallback (`gemini-2.5-flash` $\to$ `gemini-2.5-pro` $\to$ `gemini-1.5-flash` $\to$ `gemini-1.5-pro`).
+- See [PERFORMANCE.md](PERFORMANCE.md) for detailed before/after benchmarks and architecture diagrams.
 
 ## ✅ Quality Gates (all green in CI)
 
 ```bash
-npm run lint        # ESLint — zero warnings allowed
-npm run typecheck   # TypeScript strict, zero errors
-npm run test        # Vitest — 81 tests across 8 suites
-npm run test:coverage  # ~80% statements / ~94% functions on lib/, floor enforced
-npm run check:env   # validates runtime env (placeholder detection)
-npm run build       # next build
+npm run verify        # Runs the complete quality pipeline (lint, typecheck, coverage, build, env, bundle)
+npm run lint          # ESLint — zero warnings allowed (--max-warnings 0)
+npm run typecheck     # TypeScript strict, zero errors
+npm run test          # Vitest — 118 tests across 12 suites
+npm run test:coverage # 93.5% stmts / 98.1% funcs on lib/, strict floor enforced
+npm run check:bundle  # Enforces First Load JS gzip budgets per route
+npm run check:env     # Validates runtime env (placeholder detection)
+npm run build         # Next.js standalone production build
 ```
 
 The suite covers what matters most for this product: **API integration
 tests** (all 3 routes with a real PDF), **component tests** (Testing
 Library), **hallucination defence** (fabricated citations are
-corrected/dropped, disclaimers are forced), input validation,
-prompt-contract integrity, rate limiting, a **repository secrets scan**,
-and accessibility regressions. Every push runs lint → typecheck → test →
-build → TruffleHog in [GitHub Actions](.github/workflows/ci.yml).
+corrected/dropped, disclaimers are forced), **caching & token budgeting**,
+input validation, prompt-contract integrity, rate limiting, a **repository
+secrets scan**, and accessibility regressions. Every push runs lint →
+typecheck → test → build → check:bundle → TruffleHog in [GitHub Actions](.github/workflows/ci.yml).
 See [EVALUATION.md](EVALUATION.md) for the full criteria-to-evidence map.
 
 **Docker:** `docker build -t nyayai . && docker run -p 3000:3000 -e GEMINI_API_KEY=... nyayai`

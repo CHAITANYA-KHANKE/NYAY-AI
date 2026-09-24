@@ -8,6 +8,7 @@
  */
 
 import { useCallback, useEffect, useMemo, useState } from 'react';
+import dynamic from 'next/dynamic';
 import Link from 'next/link';
 import {
   BookOpen,
@@ -17,11 +18,9 @@ import {
   MessageSquare,
   RotateCcw,
 } from 'lucide-react';
-import ChatInterface from '@/components/ChatInterface';
 import ClauseCard from '@/components/ClauseCard';
 import Disclaimer from '@/components/Disclaimer';
 import HealthScore from '@/components/HealthScore';
-import PDFViewer from '@/components/PDFViewer';
 import RiskBadge from '@/components/RiskBadge';
 import Reveal from '@/components/ui/Reveal';
 import { useRouter } from 'next/navigation';
@@ -37,6 +36,24 @@ import type {
   RiskLevel,
   UserProfile,
 } from '@/lib/types';
+
+const ChatInterface = dynamic(() => import('@/components/ChatInterface'), {
+  ssr: false,
+  loading: () => (
+    <div className="flex h-full items-center justify-center bg-white p-6" aria-hidden="true">
+      <div className="h-8 w-8 animate-spin rounded-full border-4 border-slate-200 border-t-brand-600" />
+    </div>
+  ),
+});
+
+const PDFViewer = dynamic(() => import('@/components/PDFViewer'), {
+  ssr: false,
+  loading: () => (
+    <div className="flex h-full items-center justify-center bg-white p-6" aria-hidden="true">
+      <div className="h-8 w-8 animate-spin rounded-full border-4 border-slate-200 border-t-brand-600" />
+    </div>
+  ),
+});
 
 interface ViewerTarget {
   page: number;
@@ -113,6 +130,10 @@ export default function DashboardPage() {
   const handleCitationClick = useCallback((page: number, quote?: string) => {
     setViewerTarget({ page, quote });
     setActiveTab('viewer');
+  }, []);
+
+  const handlePageChange = useCallback((page: number) => {
+    setViewerTarget((prev) => ({ ...prev, page }));
   }, []);
 
   const handleNewDocument = useCallback(() => {
@@ -315,7 +336,7 @@ export default function DashboardPage() {
                   pages={pages}
                   activePage={viewerTarget.page}
                   highlightText={viewerTarget.quote}
-                  onPageChange={(page) => setViewerTarget((prev) => ({ ...prev, page }))}
+                  onPageChange={handlePageChange}
                 />
               )}
             </div>

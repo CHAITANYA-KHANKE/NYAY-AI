@@ -9,12 +9,11 @@
  */
 
 import { DOC_TYPE_LABELS, LEGAL_DISCLAIMER, MISSING_INFO_PHRASE, ROLE_LABELS } from './constants';
+import { formatPagesAsContext } from './context';
 import type { ChatMessage, ParsedPage, UserProfile } from './types';
 
-/** Canonical document format shared by analysis and chat: [PAGE n] blocks. */
-export function formatPagesAsContext(pages: ParsedPage[]): string {
-  return pages.map((page) => `[PAGE ${page.pageNumber}]\n${page.text.trim()}`).join('\n\n');
-}
+// Re-export formatPagesAsContext for backwards compatibility
+export { formatPagesAsContext } from './context';
 
 function describeUser(profile: UserProfile): string {
   const concerns =

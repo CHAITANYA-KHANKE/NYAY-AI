@@ -5,7 +5,7 @@
  * score plus the High/Medium/Low risk breakdown (PRD F6).
  */
 
-import { useEffect, useState } from 'react';
+import { memo, useEffect, useState } from 'react';
 
 interface HealthScoreProps {
   score: number;
@@ -23,7 +23,7 @@ function scoreColor(score: number): { stroke: string; text: string; verdict: str
   return { stroke: '#EF4444', text: 'text-risk-high', verdict: 'High risk — negotiate before signing' };
 }
 
-export default function HealthScore({ score, high, medium, low }: HealthScoreProps) {
+function HealthScore({ score, high, medium, low }: HealthScoreProps) {
   const clamped = Math.min(100, Math.max(0, Math.round(score)));
   const [display, setDisplay] = useState(0);
   const color = scoreColor(clamped);
@@ -95,3 +95,5 @@ export default function HealthScore({ score, high, medium, low }: HealthScorePro
     </div>
   );
 }
+
+export default memo(HealthScore);

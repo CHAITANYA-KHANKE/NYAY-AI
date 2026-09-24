@@ -11,7 +11,11 @@
 
 import pdfParse from 'pdf-parse/lib/pdf-parse.js';
 import { MAX_PAGES } from './constants';
+import { countWords } from './context';
 import type { ParsedPage } from './types';
+
+// Re-export countWords for backwards compatibility
+export { countWords } from './context';
 
 export class PdfParseError extends Error {
   constructor(
@@ -71,10 +75,6 @@ async function renderPageWithFormFeed(pageData: unknown): Promise<string> {
   return `${text}\f`;
 }
 
-function countWords(text: string): number {
-  return text.split(/\s+/).filter(Boolean).length;
-}
-
 /**
  * Extract per-page text from a PDF buffer.
  * Throws PdfParseError with a user-friendly message on every edge case
@@ -97,7 +97,10 @@ export async function extractPages(buffer: Buffer): Promise<ParsedPage[]> {
 
   let rawText: string;
   try {
-    const result = await pdfParse(buffer, { pagerender: renderPageWithFormFeed });
+    const result = await pdfParse(buffer, {
+      pagerender: renderPageWithFormFeed,
+      max: MAX_PAGES + 1,
+    });
     rawText = result.text ?? '';
   } catch (error) {
     const message = error instanceof Error ? error.message.toLowerCase() : '';

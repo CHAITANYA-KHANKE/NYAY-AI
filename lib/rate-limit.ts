@@ -7,34 +7,49 @@
 
 import type { NextRequest } from 'next/server';
 
-interface Bucket {
-  count: number;
-  resetAt: number;
-}
-
-const buckets = new Map<string, Bucket>();
-const MAX_BUCKETS = 5_000;
-
 export interface RateLimitResult {
   allowed: boolean;
   remaining: number;
   retryAfterSeconds: number;
 }
 
-function pruneExpired(now: number): void {
-  if (buckets.size <= MAX_BUCKETS) return;
+interface Bucket {
+  count: number;
+  resetAt: number;
+}
+
+const buckets = new Map<string, Bucket>();
+let lastSweep = 0;
+const SWEEP_INTERVAL_MS = 30_000;
+const MAX_BUCKETS = 5_000;
+
+function sweepIfDue(now: number): void {
+  if (now - lastSweep < SWEEP_INTERVAL_MS) return;
+  lastSweep = now;
   for (const [key, bucket] of buckets) {
-    if (bucket.resetAt <= now) buckets.delete(key);
+    if (bucket.resetAt <= now) {
+      buckets.delete(key);
+    }
+  }
+}
+
+function evictOldest(): void {
+  while (buckets.size > MAX_BUCKETS) {
+    const oldestKey = buckets.keys().next().value;
+    if (oldestKey === undefined) break;
+    buckets.delete(oldestKey);
   }
 }
 
 export function checkRateLimit(key: string, limit: number, windowMs: number): RateLimitResult {
   const now = Date.now();
-  pruneExpired(now);
+  sweepIfDue(now);
 
   const existing = buckets.get(key);
   if (!existing || existing.resetAt <= now) {
+    if (existing) buckets.delete(key);
     buckets.set(key, { count: 1, resetAt: now + windowMs });
+    evictOldest();
     return { allowed: true, remaining: limit - 1, retryAfterSeconds: 0 };
   }
 
@@ -57,4 +72,13 @@ export function getClientKey(request: NextRequest, route: string): string {
     ? forwarded.split(',')[0]?.trim() ?? 'unknown'
     : (request as unknown as { ip?: string }).ip ?? 'local';
   return `${route}:${ip}`;
+}
+
+export function rateLimiterSize(): number {
+  return buckets.size;
+}
+
+export function clearRateLimiter(): void {
+  buckets.clear();
+  lastSweep = 0;
 }

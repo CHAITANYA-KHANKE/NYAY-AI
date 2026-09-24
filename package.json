@@ -12,6 +12,9 @@
     "test:watch": "vitest",
     "test:coverage": "vitest run --coverage",
     "check:env": "node scripts/check-env.mjs",
+    "check:bundle": "node scripts/bundle-budget.mjs",
+    "perf:report": "node scripts/bundle-budget.mjs --report",
+    "verify": "npm run lint && npm run typecheck && npm run test:coverage && npm run build && npm run check:env && npm run check:bundle",
     "sample:pdf": "node scripts/build-sample-pdf.mjs"
   },
   "dependencies": {

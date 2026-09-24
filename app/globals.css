@@ -289,3 +289,10 @@ mark {
     transition-duration: 0.01ms !important;
   }
 }
+
+/* Content-visibility optimization for below-the-fold sections */
+.cv-auto {
+  content-visibility: auto;
+  contain-intrinsic-size: auto 700px;
+}
+

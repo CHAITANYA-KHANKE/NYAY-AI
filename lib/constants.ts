@@ -37,6 +37,21 @@ export const PDF_MIME_TYPE = 'application/pdf';
 export const MAX_CHAT_QUESTION_CHARS = 2_000;
 export const MAX_CHAT_HISTORY_MESSAGES = 20;
 
+/* ------------------------------- AI Budgets ------------------------------ */
+
+export const AI_BUDGETS = {
+  analyze: { perAttemptMs: 45_000, totalMs: 75_000 },
+  chat: { perAttemptMs: 20_000, totalMs: 45_000 },
+} as const;
+
+export const MAX_CHAT_OUTPUT_TOKENS = envNumber(process.env.MAX_CHAT_OUTPUT_TOKENS, 1_024);
+export const MAX_ANALYSIS_OUTPUT_TOKENS = envNumber(process.env.MAX_ANALYSIS_OUTPUT_TOKENS, 6_144);
+export const MAX_CHAT_CONTEXT_TOKENS = envNumber(process.env.MAX_CHAT_CONTEXT_TOKENS, 24_000);
+export const RETRY_BASE_DELAY_MS = 250;
+export const RETRY_MAX_DELAY_MS = 2_000;
+export const ANALYSIS_CACHE = { maxEntries: 64, ttlMs: 10 * 60_000 } as const;
+export const PROMPT_VERSION = 'v2';
+
 /* ------------------------------ Rate limits ------------------------------ */
 /** brain/10 rule S4 — in-memory sliding window, per route + IP. */
 export const RATE_LIMITS = {
