@@ -41,8 +41,15 @@ import {
  * through this verified chain instead of failing the request.
  */
 const PRIMARY_MODEL = process.env.GEMINI_MODEL?.trim() || 'gemini-3.6-flash';
-const MODEL_CANDIDATES: string[] = Array.from(
-  new Set([PRIMARY_MODEL, 'gemini-3.7-flash', 'gemini-3.8-flash', 'gemini-3-flash-preview']),
+export const MODEL_CANDIDATES: string[] = Array.from(
+  new Set([
+    PRIMARY_MODEL,
+    'gemini-3.7-flash',
+    'gemini-3.8-flash',
+    'gemini-3.5-flash',
+    'gemini-flash-latest',
+    'gemini-3-flash-preview',
+  ]),
 );
 
 const MAX_ATTEMPTS_PER_MODEL = 2;

@@ -24,6 +24,7 @@ import {
   chatWithDocument,
   clearAiCache,
   GeminiError,
+  MODEL_CANDIDATES,
 } from '../lib/gemini';
 
 const samplePages: ParsedPage[] = [
@@ -120,7 +121,7 @@ describe('analyzeDocument budgeting & caching', () => {
     expect(mockGenerateContent).toHaveBeenCalledTimes(2);
   });
 
-  it('retries on malformed response format up to 8 times across 4 candidate models', async () => {
+  it('retries on malformed response format across candidate models', async () => {
     mockGenerateContent.mockResolvedValue({
       response: { text: () => '{"broken": "not schema compliant"}' },
     });
@@ -134,10 +135,10 @@ describe('analyzeDocument budgeting & caching', () => {
 
     expect(thrownError).toBeInstanceOf(GeminiError);
     expect((thrownError as GeminiError).code).toBe('AI_BAD_RESPONSE');
-    expect(mockGenerateContent.mock.calls.length).toBeLessThanOrEqual(8);
+    expect(mockGenerateContent.mock.calls.length).toBeLessThanOrEqual(MODEL_CANDIDATES.length * 2);
   });
 
-  it('immediately cascades across models on 503 capacity errors (exactly 4 calls)', async () => {
+  it('immediately cascades across models on 503 capacity errors', async () => {
     mockGenerateContent.mockRejectedValue(new Error('503 Service Unavailable: High demand'));
 
     let thrownError: unknown = null;
@@ -149,7 +150,7 @@ describe('analyzeDocument budgeting & caching', () => {
 
     expect(thrownError).toBeInstanceOf(GeminiError);
     expect((thrownError as GeminiError).code).toBe('AI_UNAVAILABLE');
-    expect(mockGenerateContent).toHaveBeenCalledTimes(4);
+    expect(mockGenerateContent).toHaveBeenCalledTimes(MODEL_CANDIDATES.length);
   });
 
   it('bounds hanging model requests within total deadline budget', async () => {
